@@ -1,20 +1,25 @@
-# UltraSync Python Tool
+# UltraSync Python Tool - DEVELOPMENT/RESEARCH BUILD ONLY
+**This build is not released, and should only be used for development and research purposes**
 
-This tool is designed to allow 'API' access through a CLI wrapper to several types of alarm system IP modules that use the UltraSync+ mobile app. These modules are generally found in or can be added to systems produced by the below vendors:
+This tool is designed to allow 'API' access through a CLI wrapper to several types of alarm system IP modules that utilise the UltraSync+ mobile app. These modules are generally found in or can be added to systems produced by the below vendors:
  - Hills Ltd (Business defunct in 2023, now operating as Aritech (a division of Kidde Global Solutions))
  - United Technologies Corporation (Alarm division defunct in 2021)
 
-The tool can be leveraged by other scripts/integrations such as https://github.com/caronc/ha-ultrasync for integration into Home Automation systems.
+The tool can be leveraged by other scripts/integrations such as [HA UltraSync](https://github.com/caronc/ha-ultrasync) for integration into Home Automation systems.
 
 # Compatibility
 
-The tool is written to be compatible with the NX-595E [Hills/Aritech](https://aritech.com.au/) ComNav, [Interlogix](https://www.interlogix.com/index.html) xGen, xGen8 (such as [NXG-8-Z-BO]), and [ZeroWire](https://www.interlogix.com/index.html) UltraSync-based alarm solutions. It is possible that more systems are supported that utilise the UltraSync+ app and share similar code structure, however any not listed here are untested by the code author/contributors.
+The tool is written to be compatible with the [Hills/Aritech](https://aritech.com.au/) NX-595E ComNav, [Interlogix](https://www.interlogix.com/index.html) xGen/xGen8 (such as NXG-8-Z-BO), and [ZeroWire](https://www.interlogix.com/index.html) UltraSync-based alarm solutions. It is possible that more systems are supported that utilise the UltraSync+ app and share similar code structure, however any not explicitly listed here are untested by the code author/contributors.
 
-Later model systems or systems running newer firmware have blocked local network login due to security concerns, so may only allow access through remote/online login (over the internet). Compatibility has been added for this in the tool, however relies on the web service continuining to support it.
+**Note**:
+ComNav modules runinng firmware version P004000-12 and above disable access to programming menus for cybersecurity reasons. To enable programming menus permanently, turn on Feature Location 19 Option 6. With programming menus disabled, users will only be allowed access through remote/online login (over the internet). Compatibility for remote login cannot be added to this tool due to there being no public API available, and no official vendor support for this method outside of the UltraSync+ mobile app. Later model Aritech Reliance XR series alarm systems include a built-in IP module that allows local network access as it is not affected by the same vulnerabilities.
 
-As the original manufacturer(s) are mostly defunct, new software development is generally not expected at the vendor level.
+[**ComNav Product Security Advisory**](https://www.corporate.carrier.com/Images/CARR-PSA-Hills-ComNav-002-1121_tcm558-149392.pdf)
 
-![ZeroWire Hub Image](https://raw.githubusercontent.com/caronc/ultrasync/master/static/zerowire_hub.jpeg)
+As the original manufacturer(s) are mostly defunct, new software development is generally not expected at the vendor level. Newer Aritech ATS alarm systems utilise the Advisor Advanced Pro mobile app instead of UltraSync+ and are unlikely to be supported by this tool.
+
+*UltraSync Hub*
+![ZeroWire Hub Image](https://raw.githubusercontent.com/caronc/ultrasync/master/static/zerowire_hub.jpeg "UltraSync Hub")
 
 [![Paypal](https://img.shields.io/badge/paypal-donate-green.svg)](https://paypal.me/lead2gold?locale.x=en_US)
 [![Follow](https://img.shields.io/twitter/follow/l2gnux)](https://twitter.com/l2gnux/)<br/>
@@ -33,11 +38,11 @@ As the original manufacturer(s) are mostly defunct, new software development is 
    ```
 
 2. Create a configuration file that identifies:
-   1. The hostname or IP address of the ComNav/ZeroWire hub you've got setup on some the network.
+   1. The hostname or IP address of the alarm system on your local network.
    1. Your alarm system login User ID (case-sensitive)
    1. Your alarm system login pin.
 
-   **Note**: You can generally only be logged into the alarm system with the same user *once*; a subsequent login with the same user logs out the other. Since this tool actively polls and maintains a login session to your Hub, it can prevent you from being able to log into at the same time elsewhere (via it's website).  **It is strongly recommended that you create a second user account on your system dedicated to just this service.**
+   **Note**: You can generally only be logged into the alarm system with the same user *once*; a subsequent login with the same user logs out the other. Since this tool actively polls and maintains a login session to your system, it can prevent you from being able to log into at the same time elsewhere (via it's website).  **It is strongly recommended that you create a second user account on your system dedicated to just this service.**
 
    ```yaml
    # An example of what would be found in your configuration file:
@@ -46,16 +51,9 @@ As the original manufacturer(s) are mostly defunct, new software development is 
    #
    # For local network login you must specify an ip/hostname, user, and pin
    #
-   # For remote/online login you must specify the online flag, plus a serial number, passcode, and user agent in addition to the above required fields
-   #
-   host: 192.168.0.30 (or https://webauth-a.ultraconnect.com for remote/online login)
+   host: 192.168.0.30
    user: My Username (case-sensitive)
    pin: 1234
-   # Optional for remote/online login
-   online: True
-   serial_number: 12345678
-   passcode: 91011121314
-   user_agent: UltraConnect/0487 CFNetwork/1474 Darwin/23.0.0
    ```
 
 3. Use the **--scene** (**-s**) to set your security system's alarm scene.  The possible options are: `disarm`, `away`, `stay`, `fire`, `medical`, and `panic`. The latter 3 are only available for NX-595E currently.
@@ -154,10 +152,6 @@ You can also (optionally) set the following global variables to provide the equi
 | **ULTRASYNC_USER** | Provides the `user` variable to the library
 | **ULTRASYNC_HOST** | Provides the `host` variable to the library
 | **ULTRASYNC_SSL_VERIFY** | Provides the `verify` variable to the library (optional, defaults to yes if not set)
-| **ULTRASYNC_ONLINE** | Provides the `online` variable to the library (optional, defaults to no if not set)
-| **ULTRASYNC_SERIAL_NUMBER** | Provides the `serial number` variable to the library (required for remote/online login)
-| **ULTRASYNC_PASSCODE** | Provides the `passcode` variable to the library (required for remote/online login)
-| **ULTRASYNC_USER_AGENT** | Provides the `user agent` variable to the library (required for remote/online login)
 
 ## Disclaimer
 
