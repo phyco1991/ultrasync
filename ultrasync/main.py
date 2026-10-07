@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
+# Copyright (C) 2026 Chris Caron <lead2gold@gmail.com>
 # All rights reserved.
 #
 # This code is licensed under the MIT License.
@@ -65,7 +66,8 @@ class UltraSync(UltraSyncConfig):
     # Tracks our Maximum Sequence Count
     max_sequence_count = 12
 
-    # Tracks our Maximum Area Count
+    # The number of area slots we always prepare (one area bank).  Panels
+    # that report more areas than this are still read in full.
     max_area_count = 8
 
     panel_encoding = 'utf-8'
@@ -249,14 +251,40 @@ class UltraSync(UltraSyncConfig):
             return True
 
         logger.info('Graceful log off from {}'.format(self.host))
+
+        # The panel needs to be told which session is ending
+        payload = {
+            'sess': self.session_id,
+        }
+
         # Reset our variables reguardless if we're successfully able to log
         # out or not
         self.session_id = None
 
-        # Perform a logout
-        response = self.__get('/logout.cgi', rtype=HubResponseType.RAW)
-        if not response:
-            logger.error('Failed to authenticate to {}'.format(self.host))
+        # Prepare our headers the same way the panel's own page would
+        headers = {
+            'Referer': 'http://{}/login.htm'.format(self.host),
+            'User-Agent': self.user_agent
+        }
+
+        # Perform a logout.  This is sent directly (not through __get) so a
+        # failure can never log us back in and open yet another session.
+        try:
+            request = self.session.post(
+                '{}/logout.cgi'.format(self.url), data=payload,
+                auth=self.auth, headers=headers, verify=self.verify,
+                timeout=self.timeout, allow_redirects=False)
+
+        except requests.exceptions.RequestException as e:
+            # The session will simply expire on the panel by itself
+            logger.warning('Failed to log off from {}'.format(self.host))
+            logger.debug('Log off exception: {}'.format(e))
+            return False
+
+        # The panel either answers or sends us back to its login page
+        if request.status_code not in (
+                requests.codes.ok, requests.codes.found):
+            logger.warning('Failed to log off from {}'.format(self.host))
             return False
 
         return True
@@ -451,12 +479,14 @@ class UltraSync(UltraSyncConfig):
                         progress_track += progress_ratio
 
         else:
+            # Create our dump directory once; every captured page goes in it
+            os.makedirs(path, mode=mode, exist_ok=True)
+
             for to_file, kwargs in urls.items():
                 response = self.__get(rtype=HubResponseType.RAW, **kwargs)
                 if not response:
                     continue
 
-                os.mkdir(path, mode=mode)
                 with open(os.path.join(path, to_file), 'w',
                           encoding=self.panel_encoding) as fp:
                     # Write our content to disk
@@ -470,7 +500,10 @@ class UltraSync(UltraSyncConfig):
                         progress.update(progress_ratio)
                         progress_track += progress_ratio
 
-        progress.update(100.001 - progress_track)
+        if progress:
+            # Fill whatever is left of the progress bar
+            progress.update(100.001 - progress_track)
+
         return
 
     def set(self, area=1, state=AlarmScene.DISARMED):
@@ -783,7 +816,8 @@ class UltraSync(UltraSyncConfig):
         # ComNav entries looks like this:
         #  var areaStatus = new Array(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
         #
-        # Every chunk of 17 bank states represents 1 area
+        # Every chunk of 17 ComNav values is one area bank, which covers a
+        # group of 8 areas (one bit per area)
         match = re.search(
             r'var areaStatus\s*=\s*'
             r'((new\s+)?Array)?[\[(](?P<states>[^\])]+)[\])];.*',
@@ -817,15 +851,30 @@ class UltraSync(UltraSyncConfig):
             [0] * (UltraSync.max_sequence_count - len(self._asequence)))
         area_names.extend(['!'] * (UltraSync.max_area_count - len(area_names)))
 
+        def area_bank_state(x):
+            # Each group of 8 areas has its own bank state (bank 0 is areas
+            # 1 to 8), so panels with more than 8 areas read the right one
+            group = math.floor(x / 8)
+
+            if self.vendor is NX595EVendor.COMNAV:
+                # ComNav sends 17 values for each group of 8 areas
+                state = bank_states[group * 17:(group * 17) + 17]
+
+                # A group the panel sent no values for has nothing set
+                return state if len(state) == 17 else [0] * 17
+
+            # The others send one hex string per group of 8 areas.  A group
+            # the panel sent no string for has nothing set, the same as
+            # ComNav, rather than copying another group's areas.
+            return bank_states[group] \
+                if group < len(bank_states) else '0' * len(bank_states[0])
+
         # Store our Areas ('%21' == '!'; these are un-used areas)
         self.areas = \
             {x: {'name': unquote(y).strip()
                  if unquote(y).strip() else 'Area {}'.format(x + 1),
                  'bank': x,
-                 'bank_state': bank_states[math.floor(x / 8) * 17:
-                                           (math.floor(x / 8) * 17) + 17]
-                 if self.vendor is NX595EVendor.COMNAV
-                 else bank_states[0]}
+                 'bank_state': area_bank_state(x)}
 
              for x, y in enumerate(area_names)
              if y != '%21' and y != '!'}
@@ -840,7 +889,19 @@ class UltraSync(UltraSyncConfig):
         # Xgen8 and Xgen share the same area processing
         vendor = self.vendor \
             if self.vendor != NX595EVendor.XGEN8 else NX595EVendor.XGEN
-        return getattr(self, '{}_process_areas'.format(vendor))()
+        result = getattr(self, '{}_process_areas'.format(vendor))()
+
+        # Add a simple arm mode to each area (away, stay or disarm).  The
+        # status text can't be used for this because alarms, delays and
+        # "Not Ready" replace it.  The panel's own status.js checks the
+        # partial (stay) flag before the armed (away) flag, so we do too.
+        for area in self.areas.values():
+            states = area.get('states', {})
+            area['arm_state'] = AlarmScene.STAY if states.get('partial') \
+                else AlarmScene.AWAY if states.get('armed') \
+                else AlarmScene.DISARMED
+
+        return result
 
     def xgen_process_areas(self):
         """
@@ -1297,9 +1358,13 @@ class UltraSync(UltraSyncConfig):
             # Priority, the lower, the higher it is; 5 being the lowest
             priority = 5
 
-            # prepare ourselves a virtual states for reference
-            vbank = [int(self._zbank[s][idx:idx + 2], 16) & mask
-                     for s in range(0, 18)]
+            # prepare ourselves a virtual states for reference. Some xGen
+            # firmware returns fewer state banks than ZeroWire panels; treat
+            # missing banks as inactive instead of failing during login.
+            vbank = [
+                int(self._zbank[s][idx:idx + 2] or '0', 16) & mask
+                if s < len(self._zbank) else 0
+                for s in range(0, 18)]
 
             # Update our zone virtual bank
             self._zvbank[bank] = ''.join(
@@ -1724,6 +1789,17 @@ class UltraSync(UltraSyncConfig):
         return getattr(self, '_{}_area_status_update'
                              .format(self.vendor))(bank=bank)
 
+    def _store_area_bank_state(self, bank, bank_state):
+        """
+        Stores a new area bank state on every area that the bank covers
+        """
+        # Each area bank holds the state of a group of 8 areas (bank 0 is
+        # areas 1 to 8), one bit per area.  The panel's own status.js
+        # works the same way, so every area in the group gets the update.
+        for area_no, area in self.areas.items():
+            if math.floor(area_no / 8) == bank:
+                area['bank_state'] = bank_state
+
     def _zerowire_area_status_update(self, bank=0):
         """
         Performs a area status check for the Interlogix ZeroWire Hub
@@ -1767,7 +1843,7 @@ class UltraSync(UltraSyncConfig):
             [unquote(e).strip() for e in response.get('system', [])]
 
         # Update our bank states
-        self.areas[bank]['bank_state'] = response['bankstates']
+        self._store_area_bank_state(bank, response['bankstates'])
 
         # Convert Hex time to Local Date Time
         response['time'] = datetime.fromtimestamp(
@@ -1777,7 +1853,7 @@ class UltraSync(UltraSyncConfig):
 
     def _xgen_area_status_update(self, bank=0):
         """
-        Performs a area status check for the Interlogix ZeroWire Hub
+        Performs a area status check for the Interlogix xGen Hub
 
         A status response could look like this:
         {
@@ -1818,7 +1894,7 @@ class UltraSync(UltraSyncConfig):
             [unquote(e).strip() for e in response.get('system', [])]
 
         # Update our bank states
-        self.areas[bank]['bank_state'] = response['bankstates']
+        self._store_area_bank_state(bank, response['bankstates'])
 
         # Convert Hex time to Local Date Time
         response['time'] = datetime.fromtimestamp(
@@ -1828,7 +1904,7 @@ class UltraSync(UltraSyncConfig):
 
     def _xgen8_area_status_update(self, bank=0):
         """
-        Performs a area status check for the Interlogix ZeroWire Hub
+        Performs a area status check for the Interlogix xGen8 Hub
 
         A status response could look like this:
         {
@@ -1874,7 +1950,7 @@ class UltraSync(UltraSyncConfig):
             [unquote(e).strip() for e in response.get('system', [])]
 
         # Update our bank states
-        self.areas[bank]['bank_state'] = response['bankstates']
+        self._store_area_bank_state(bank, response['bankstates'])
 
         # Convert Hex time to Local Date Time
         response['time'] = datetime.fromtimestamp(
@@ -1942,14 +2018,15 @@ class UltraSync(UltraSyncConfig):
             self.__extra_area_status = []
 
         try:
-            self.areas[bank]['bank_state'] = \
-                [int(response.find('stat{}'.format(x)).text)
-                 for x in range(0, 17)]
+            bank_state = [int(response.find('stat{}'.format(x)).text)
+                          for x in range(0, 17)]
 
-        except AttributeError:
-            # <statX> stanza was not found
+        except (AttributeError, TypeError, ValueError):
+            # A <statX> stanza was missing, empty or not a number; keep the
+            # areas as they were rather than storing a broken state
             return None
 
+        self._store_area_bank_state(bank, bank_state)
         return response
 
     def _zone_status_update(self, bank=0):
@@ -2003,7 +2080,7 @@ class UltraSync(UltraSyncConfig):
 
     def _xgen_zone_status_update(self, bank=0):
         """
-        Performs a zone status check for the Xgen Zerowire Hub
+        Performs a zone status check for the Interlogix xGen Hub
 
         A status response could look like this:
         {
@@ -2045,7 +2122,7 @@ class UltraSync(UltraSyncConfig):
 
     def _xgen8_zone_status_update(self, bank=0):
         """
-        Performs a zone status check for the Xgen8 Zerowire Hub
+        Performs a zone status check for the Interlogix xGen8 Hub
 
         A status response could look like this:
         {
@@ -2344,7 +2421,8 @@ class UltraSync(UltraSyncConfig):
         remain unchanged.
 
         If a sequence value is changed, the index of the 'area' is the bank
-        that was updated.... so if index 0 was updated, then Area 1 changed.
+        that was updated.  Each area bank covers a group of 8 areas, so if
+        index 0 was updated, then something in Areas 1 to 8 changed.
         It is up to the user to call for an _area_status_update() with the
         respected index that needs updating.
 
@@ -2418,7 +2496,8 @@ class UltraSync(UltraSyncConfig):
         remain unchanged.
 
         If a sequence value is changed, the index of the 'area' is the bank
-        that was updated.... so if index 0 was updated, then Area 1 changed.
+        that was updated.  Each area bank covers a group of 8 areas, so if
+        index 0 was updated, then something in Areas 1 to 8 changed.
         It is up to the user to call for an _area_status_update() with the
         respected index that needs updating.
 
@@ -2499,7 +2578,8 @@ class UltraSync(UltraSyncConfig):
         remain unchanged.
 
         If a sequence value is changed, the index of the 'area' is the bank
-        that was updated.... so if index 0 was updated, then Area 1 changed.
+        that was updated.  Each area bank covers a group of 8 areas, so if
+        index 0 was updated, then something in Areas 1 to 8 changed.
         It is up to the user to call for an _area_status_update() with the
         respected index that needs updating.
 
@@ -2580,7 +2660,8 @@ class UltraSync(UltraSyncConfig):
         remain unchanged.
 
         If a sequence value is changed, the index of the 'area' is the bank
-        that was updated.... so if index 0 was updated, then Area 1 changed.
+        that was updated.  Each area bank covers a group of 8 areas, so if
+        index 0 was updated, then something in Areas 1 to 8 changed.
         It is up to the user to call for an _area_status_update() with the
         respected index that needs updating.
 

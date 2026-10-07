@@ -8,7 +8,7 @@ The tool can be leveraged by other scripts/integrations such as [HA UltraSync](h
 
 # Compatibility
 
-The tool is written to be compatible with the [Hills/Aritech](https://aritech.com.au/) NX-595E ComNav, [Interlogix](https://www.interlogix.com/index.html) xGen/xGen8 (such as NXG-8-Z-BO), and [ZeroWire](https://www.interlogix.com/index.html) UltraSync-based alarm solutions. It is possible that more systems are supported that utilise the UltraSync+ app and share similar code structure, however any not explicitly listed here are untested by the code author/contributors.
+The tool is written to be compatible with the [Hills/Aritech](https://aritech.com.au/) NX-595E ComNav, [Interlogix](https://www.interlogix.com/index.html) xGen/xGen8 (such as NXG-8-Z-BO and Caddx NXG64IP), and [ZeroWire](https://www.interlogix.com/index.html) UltraSync-based alarm solutions. It is possible that more systems are supported that utilise the UltraSync+ app and share similar code structure, however any not explicitly listed here are untested by the code author/contributors.
 
 **Note**:
 ComNav modules runinng firmware version P004000-12 and above disable access to programming menus for cybersecurity reasons. To enable programming menus permanently, turn on Feature Location 19 Option 6. With programming menus disabled, users will only be allowed access through remote/online login (over the internet). Compatibility for remote login cannot be added to this tool due to there being no public API available, and no official vendor support for this method outside of the UltraSync+ mobile app. Later model Aritech Reliance XR series alarm systems include a built-in IP module that allows local network access as it is not affected by the same vulnerabilities.
@@ -103,6 +103,15 @@ As the original manufacturer(s) are mostly defunct, new software development is 
   # Print a JSON formatted snapshot of all home security details
   ultrasync --details
   ```
+
+  Each area includes an `arm_state` of `away`, `stay` or `disarm`. Use it when you only want to know whether the alarm is armed. The `status` of an area is what the keypad would show, so it can also be something like `Burglar Alarm`, `Exit Delay 1` or `Not Ready`.
+
+  ```bash
+  # Print the arm state of the first area (requires jq)
+  ultrasync --details | jq -r '.areas[0].arm_state'
+  ```
+
+  `--details` only writes JSON to the screen (messages go to stderr), and exits with an error code if the panel could not be read.
 
 - You can perform a dump of all of the web based files (*that I've found to be useful so far*) to disk.  This makes troubleshooting much easier.
 
