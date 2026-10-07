@@ -2228,20 +2228,44 @@ class UltraSync(UltraSyncConfig):
             logger.warning("Failed to gather history data from response")
             self.history_data = {}
             return True
-        lines = match.group(1).strip().splitlines()
+        # Clean lines and remove any empty lines
+        lines = [
+            line.strip().strip('*')
+            for line in match.group(1).splitlines()
+            if line.strip()
+        ]
 
-        if len(lines) < 5:
-            logger.warning("Unexpected history format, not enough lines")
+        # We require at least:
+        #   Action
+        #   Area
+        #   Time
+        #   Date
+        if len(lines) < 4:
+            logger.warning(
+                "Unexpected history format, not enough lines: %r",
+                lines,
+            )
             self.history_data = {}
             return True
 
-        # Clean lines and extract parts
-        lines = [line.strip().strip('*') for line in lines]
         action = lines[0]
         area_name = lines[1]
-        user = lines[2]
-        time_str = lines[3].split("Time:")[1].strip() if "Time:" in lines[3] else ""
-        date_str = lines[4].split("Date:")[1].strip() if "Date:" in lines[4] else ""
+
+        # User is optional. Time and Date are identified by their labels
+        # rather than assumed to be at fixed positions.
+        user = ""
+        time_str = ""
+        date_str = ""
+
+        for line in lines[2:]:
+            if line.startswith("Time:"):
+                time_str = line.split(":", 1)[1].strip()
+
+            elif line.startswith("Date:"):
+                date_str = line.split(":", 1)[1].strip()
+
+            elif not user:
+                user = line
 
         # Parse datetime to ISO format
         timestamp = None
